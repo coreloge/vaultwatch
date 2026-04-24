@@ -70,3 +70,22 @@ func TestSendWithRetry_ContextCancelled(t *testing.T) {
 		t.Fatal("expected error for cancelled context, got nil")
 	}
 }
+
+func TestSendWithRetry_SucceedsOnFirstAttempt(t *testing.T) {
+	var calls int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	s := webhook.New(ts.URL, "", 5*time.Second)
+	cfg := webhook.RetryConfig{MaxAttempts: 3, Delay: 10 * time.Millisecond}
+
+	if err := s.SendWithRetry(context.Background(), webhook.Payload{LeaseID: "first-attempt-test"}, cfg); err != nil {
+		t.Fatalf("expected success on first attempt, got: %v", err)
+	}
+	if atomic.LoadInt32(&calls) != 1 {
+		t.Errorf("expected exactly 1 call, got %d", calls)
+	}
+}
