@@ -3,68 +3,62 @@ package notify
 import (
 	"context"
 	"fmt"
-	"log/slog"
+	"log"
+	"time"
 
-	"github.com/example/vaultwatch/internal/alert"
-	"github.com/example/vaultwatch/internal/lease"
-	"github.com/example/vaultwatch/internal/webhook"
+	"github.com/yourusername/vaultwatch/internal/alert"
+	"github.com/yourusername/vaultwatch/internal/lease"
+	"github.com/yourusername/vaultwatch/internal/suppress"
+	"github.com/yourusername/vaultwatch/internal/webhook"
 )
 
-// Dispatcher routes lease alerts to configured webhook targets.
+// Dispatcher sends alert payloads to a configured webhook endpoint.
 type Dispatcher struct {
-	webhook   *webhook.Sender
-	builder   *alert.Builder
-	formatter *alert.Formatter
-	logger    *slog.Logger
+	hook       *webhook.Webhook
+	builder    *alert.Builder
+	suppressor *suppress.Suppressor
 }
 
-// Config holds dispatcher configuration.
-type Config struct {
-	WebhookURL    string
-	WebhookSecret string
-	Format        string
-}
-
-// New creates a Dispatcher with the given configuration.
-func New(cfg Config, logger *slog.Logger) (*Dispatcher, error) {
-	if cfg.WebhookURL == "" {
-		return nil, fmt.Errorf("webhook URL must not be empty")
+// New creates a Dispatcher targeting the given webhook URL.
+// suppressDuration controls how long a lease alert is silenced after firing.
+func New(webhookURL, secret string, suppressDuration time.Duration) (*Dispatcher, error) {
+	if webhookURL == "" {
+		return nil, fmt.Errorf("notify: webhook URL must not be empty")
 	}
-
-	sender := webhook.New(cfg.WebhookURL, cfg.WebhookSecret)
-	builder := alert.NewBuilder()
-	formatter := alert.NewFormatter(cfg.Format)
-
+	hook, err := webhook.New(webhookURL, secret)
+	if err != nil {
+		return nil, fmt.Errorf("notify: %w", err)
+	}
 	return &Dispatcher{
-		webhook:   sender,
-		builder:   builder,
-		formatter: formatter,
-		logger:    logger,
+		hook:       hook,
+		builder:    alert.NewBuilder(),
+		suppressor: suppress.New(suppressDuration),
 	}, nil
 }
 
-// Dispatch builds and sends an alert for the given lease info.
+// Dispatch builds an alert payload and sends it via the webhook.
+// If the lease is currently suppressed, the dispatch is skipped.
 func (d *Dispatcher) Dispatch(ctx context.Context, info lease.Info) error {
-	payload := d.builder.Build(info)
+	if d.suppressor.IsSuppressed(info.LeaseID) {
+		log.Printf("notify: suppressed alert for lease %s", info.LeaseID)
+		return nil
+	}
 
-	body, err := d.formatter.Format(payload)
+	payload, err := d.builder.Build(info)
 	if err != nil {
-		return fmt.Errorf("formatting alert payload: %w", err)
+		return fmt.Errorf("notify: build alert: %w", err)
 	}
 
-	if err := d.webhook.Send(ctx, body); err != nil {
-		d.logger.Error("failed to dispatch alert",
-			"lease_id", info.LeaseID,
-			"severity", payload.Severity,
-			"error", err,
-		)
-		return fmt.Errorf("sending webhook: %w", err)
+	if err := d.hook.Send(ctx, payload); err != nil {
+		return fmt.Errorf("notify: send webhook: %w", err)
 	}
 
-	d.logger.Info("alert dispatched",
-		"lease_id", info.LeaseID,
-		"severity", payload.Severity,
-		"path", info.Path,
-	)
+	d.suppressor.Suppress(info.LeaseID)
 	return nil
+}
+
+// Release clears any active suppression for the given lease ID,
+// allowing the next alert to be dispatched immediately.
+func (d *Dispatcher) Release(leaseID string) {
+	d.suppressor.Release(leaseID)
 }
