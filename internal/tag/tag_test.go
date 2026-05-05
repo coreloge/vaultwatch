@@ -66,6 +66,20 @@ func TestTag_DoesNotMutateOriginalMap(t *testing.T) {
 	}
 }
 
+func TestTag_MultiplePrefixesAllApplied(t *testing.T) {
+	tr := tag.New(map[string]string{"env": "production"})
+	tr.AddPrefix("secret/data/db", map[string]string{"service": "database"})
+	tr.AddPrefix("secret/data/db", map[string]string{"tier": "storage"})
+
+	tags := tr.Tag("secret/data/db/postgres")
+	if tags["service"] != "database" {
+		t.Errorf("expected service=database, got %q", tags["service"])
+	}
+	if tags["tier"] != "storage" {
+		t.Errorf("expected tier=storage, got %q", tags["tier"])
+	}
+}
+
 func TestKeys_IncludesAllRegisteredKeys(t *testing.T) {
 	tr := tag.New(map[string]string{"env": "prod"})
 	tr.AddPrefix("secret/", map[string]string{"region": "us-east-1"})
