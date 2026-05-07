@@ -49,7 +49,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	if healthy, err := vaultClient.IsHealthy(ctx); err != nil || !healthy {
+	if err := checkVaultHealth(ctx, vaultClient); err != nil {
 		slog.Error("vault health check failed", "error", err)
 		os.Exit(1)
 	}
@@ -77,4 +77,18 @@ func main() {
 	}
 
 	slog.Info("vaultwatch stopped")
+}
+
+// checkVaultHealth verifies that the Vault server is reachable and healthy.
+// It returns an error if the health check call fails or if Vault reports
+// itself as unhealthy.
+func checkVaultHealth(ctx context.Context, client *vault.Client) error {
+	healthy, err := client.IsHealthy(ctx)
+	if err != nil {
+		return err
+	}
+	if !healthy {
+		return fmt.Errorf("vault reported unhealthy status")
+	}
+	return nil
 }
